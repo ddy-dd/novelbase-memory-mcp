@@ -1,0 +1,30 @@
+[package]
+name = "novelbase-memory-mcp"
+version = "0.1.0"
+description = "Novel writing knowledge graph MCP server — characters, plots, timelines, and world-building"
+edition = "2021"  # 2021 最稳定，所有 Rust 版本都支持
+
+[dependencies]
+# ── 序列化（JSON-RPC + SQLite properties 都需要） ──
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ── CLI 参数解析（初学者友好） ──
+clap = { version = "4", features = ["derive"] }
+
+# ── SQLite（bundled = 自带 SQLite，不用装系统库） ──
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# ── 错误处理（初学者神器——自动包装所有错误类型） ──
+anyhow = "1"
+
+# ── 日志 ──
+log = "0.4"
+env_logger = "0.11"
+
+# ── 时间处理（时间线管理需要） ──
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tempfile = "3"    # 测试时创建临时目录
