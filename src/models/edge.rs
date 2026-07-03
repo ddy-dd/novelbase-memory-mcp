@@ -36,6 +36,8 @@ pub enum EdgeType {
     Foreshadows,
     /// 反转/意外转折（A 与预期相反）
     Twist,
+    /// 节点被标记了标签（如"重要情节"、"诗词"）
+    TaggedWith,
 }
 
 impl EdgeType {
@@ -52,6 +54,7 @@ impl EdgeType {
             "RELATED_TO" | "RelatedTo" | "related_to" => Some(Self::RelatedTo),
             "FORESHADOWS" | "Foreshadows" | "foreshadows" => Some(Self::Foreshadows),
             "TWIST" | "Twist" | "twist" => Some(Self::Twist),
+            "TAGGED_WITH" | "TaggedWith" | "tagged_with" => Some(Self::TaggedWith),
             _ => None,
         }
     }
@@ -69,6 +72,7 @@ impl EdgeType {
             Self::RelatedTo => "RELATED_TO",
             Self::Foreshadows => "FORESHADOWS",
             Self::Twist => "TWIST",
+            Self::TaggedWith => "TAGGED_WITH",
         }
     }
 
@@ -85,6 +89,7 @@ impl EdgeType {
             Self::RelatedTo => "关联",
             Self::Foreshadows => "伏笔",
             Self::Twist => "反转",
+            Self::TaggedWith => "标记",
         }
     }
 }

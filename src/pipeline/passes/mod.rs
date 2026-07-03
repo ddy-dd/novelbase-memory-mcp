@@ -4,4 +4,5 @@
 //! 写新的 pass 就是：定义一个 struct + 实现 PipelinePass。
 
 pub mod discover;
+pub mod embed;
 pub mod parse_chapter;

@@ -31,6 +31,8 @@ pub struct Context<'a> {
     pub graph: &'a mut GraphBuffer,
     /// 取消标志（设为 true 时 Pipeline 会停止）
     pub cancelled: &'a AtomicBool,
+    /// 来源标记（"original" 原著、"continuation" 续写）
+    pub source: &'a str,
 }
 
 impl<'a> Context<'a> {
@@ -41,6 +43,7 @@ impl<'a> Context<'a> {
         store: &'a Store,
         graph: &'a mut GraphBuffer,
         cancelled: &'a AtomicBool,
+        source: &'a str,
     ) -> Self {
         Self {
             project_name,
@@ -48,6 +51,7 @@ impl<'a> Context<'a> {
             store,
             graph,
             cancelled,
+            source,
         }
     }
 }

@@ -134,6 +134,9 @@ pub enum CliCommand {
         /// 项目名
         #[arg(long)]
         project: Option<String>,
+        /// 来源标记（如 "original" 原著、"continuation" 续写）
+        #[arg(long)]
+        source: Option<String>,
     },
 }
 

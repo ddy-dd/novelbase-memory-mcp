@@ -84,8 +84,12 @@ impl super::Store {
     /// 插入或更新文件哈希
     pub fn upsert_file_hash(&self, hash: &FileHash) -> Result<(), super::StoreError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO file_hashes (project, rel_path, sha256, mtime_ns, size)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO file_hashes (project, rel_path, sha256, mtime_ns, size)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(project, rel_path) DO UPDATE SET
+                 sha256 = excluded.sha256,
+                 mtime_ns = excluded.mtime_ns,
+                 size = excluded.size",
             rusqlite::params![hash.project, hash.rel_path, hash.sha256, hash.mtime_ns, hash.size],
         )?;
         Ok(())

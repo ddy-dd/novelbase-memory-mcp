@@ -13,7 +13,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 
 # ── SQLite（bundled = 自带 SQLite，不用装系统库） ──
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 
 # ── 文件哈希（增量导入需要） ──
 sha2 = "0.10"
@@ -35,6 +35,9 @@ rayon = "1"
 # ── Web UI 服务器 ──
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
+
+# ── 向量嵌入（语义搜索） ──
+fastembed = "4"
 
 [dev-dependencies]
 tempfile = "3"    # 测试时创建临时目录

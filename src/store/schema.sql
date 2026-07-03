@@ -11,11 +11,12 @@ CREATE TABLE IF NOT EXISTS nodes (
                                      project TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
     label TEXT NOT NULL,
     name TEXT NOT NULL,
-    qualified_name TEXT NOT NULL UNIQUE,
+    qualified_name TEXT NOT NULL,
     file_path TEXT,
     start_line INTEGER,
     end_line INTEGER,
-    properties TEXT NOT NULL DEFAULT '{}'
+    properties TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(project, qualified_name)
     );
 
 -- 边表（节点之间的关系）
@@ -40,10 +41,11 @@ CREATE TABLE IF NOT EXISTS file_hashes (
     );
 
 
--- 索引
-CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project);
-CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label);
-CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes(qualified_name);
-CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
-CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
+-- 索引（带 project 前缀，匹配查询模式）
+CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(project, label);
+CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(project, name);
+CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(project, file_path);
+CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes(project, qualified_name);
+CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id, type);
+CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id, type);
+CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(project, type);

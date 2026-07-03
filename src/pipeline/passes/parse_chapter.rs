@@ -29,6 +29,8 @@ use std::path::Path;
 struct ParsedFile {
     file_id: i64,
     file_name: String,
+    source: String,          // "original" 或 "continuation"
+    chapter: String,         // 从 "# 第X回" 提取
     characters: Vec<CharacterInfo>,
     locations: Vec<LocationInfo>,
     relationships: Vec<RelationshipInfo>,
@@ -37,12 +39,14 @@ struct ParsedFile {
     environment: Option<SocialEnvInfo>,
     foreshadows: Vec<ForeshadowInfo>,
     twists: Vec<TwistInfo>,
+    tag_categories: Vec<TagCategory>,
 }
 
 /// 角色信息
 #[derive(Debug)]
 struct CharacterInfo {
     name: String,
+    source_line: u32,         // 在文件中的行号（原文溯源）
     aliases: String,          // 别名
     identity: String,         // 身份
     personality: String,      // 性格
@@ -57,6 +61,7 @@ struct CharacterInfo {
 #[derive(Debug)]
 struct LocationInfo {
     name: String,
+    source_line: u32,
     description: String,
 }
 
@@ -109,6 +114,13 @@ struct TwistInfo {
     description: String, // 描述
 }
 
+/// 标签分类信息
+#[derive(Debug)]
+struct TagCategory {
+    category: String,   // 如"情节"、"文化"、"时空"
+    tags: Vec<String>,  // 如["元妃省亲", "抄检大观园"]
+}
+
 // ============================================================
 // Pass 主体
 // ============================================================
@@ -137,6 +149,7 @@ impl PipelinePass for ParseChapterPass {
 
         let repo_path = ctx.repo_path.to_string();
         let project_name = ctx.project_name.to_string();
+        let source = ctx.source.to_string();
 
         // 🔥 并行阶段：读文件 + 解析
         let results: Vec<Result<ParsedFile, PipelineError>> = file_infos
@@ -147,6 +160,8 @@ impl PipelinePass for ParseChapterPass {
                 Ok(ParsedFile {
                     file_id: *file_id,
                     file_name: file_name.clone(),
+                    source: source.clone(),
+                    chapter: Self::extract_chapter(&content),
                     characters: Self::extract_chars(&content),
                     locations: Self::extract_locations(&content),
                     relationships: Self::extract_relationships(&content),
@@ -155,6 +170,7 @@ impl PipelinePass for ParseChapterPass {
                     environment: Self::extract_environment(&content),
                     foreshadows: Self::extract_foreshadows(&content),
                     twists: Self::extract_twists(&content),
+                    tag_categories: Self::extract_tags(&content),
                 })
             })
             .collect();
@@ -200,6 +216,14 @@ impl PipelinePass for ParseChapterPass {
                 if !ch.traits.is_empty() {
                     node.properties.insert("traits", ch.traits.as_str());
                 }
+                // 原文溯源：章节名 + 行号
+                if !parsed.chapter.is_empty() {
+                    node.properties.insert("chapter", parsed.chapter.as_str());
+                }
+                if ch.source_line > 0 {
+                    node.properties.insert("source_line", ch.source_line);
+                }
+                node.properties.insert("source", parsed.source.as_str());
 
                 let char_id = ctx.graph.upsert_node(node);
                 char_count += 1;
@@ -215,6 +239,13 @@ impl PipelinePass for ParseChapterPass {
                 if !loc.description.is_empty() {
                     node.properties.insert("description", loc.description.as_str());
                 }
+                if !parsed.chapter.is_empty() {
+                    node.properties.insert("chapter", parsed.chapter.as_str());
+                }
+                if loc.source_line > 0 {
+                    node.properties.insert("source_line", loc.source_line);
+                }
+                node.properties.insert("source", parsed.source.as_str());
                 let loc_id = ctx.graph.upsert_node(node);
                 loc_count += 1;
 
@@ -260,6 +291,7 @@ impl PipelinePass for ParseChapterPass {
                 if !pp.description.is_empty() {
                     node.properties.insert("description", pp.description.as_str());
                 }
+                node.properties.insert("source", parsed.source.as_str());
                 let note_id = ctx.graph.upsert_node(node);
                 let edge = Edge::new(&project_name, note_id, parsed.file_id, EdgeType::PartOf);
                 ctx.graph.insert_edge(edge);
@@ -271,6 +303,7 @@ impl PipelinePass for ParseChapterPass {
                 let mut node = Node::new(&project_name, NodeLabel::Note, &cf.parties, &qn);
                 node.properties.insert("type", "conflict");
                 node.properties.insert("nature", cf.nature.as_str());
+                node.properties.insert("source", parsed.source.as_str());
                 let note_id = ctx.graph.upsert_node(node);
                 let edge = Edge::new(&project_name, note_id, parsed.file_id, EdgeType::Mentions);
                 ctx.graph.insert_edge(edge);
@@ -284,6 +317,7 @@ impl PipelinePass for ParseChapterPass {
                 if !env.society.is_empty() { node.properties.insert("society", env.society.as_str()); }
                 if !env.customs.is_empty() { node.properties.insert("customs", env.customs.as_str()); }
                 if !env.culture.is_empty() { node.properties.insert("culture", env.culture.as_str()); }
+                node.properties.insert("source", parsed.source.as_str());
                 let note_id = ctx.graph.upsert_node(node);
                 let edge = Edge::new(&project_name, note_id, parsed.file_id, EdgeType::Mentions);
                 ctx.graph.insert_edge(edge);
@@ -296,9 +330,11 @@ impl PipelinePass for ParseChapterPass {
                 let mut src = Node::new(&project_name, NodeLabel::Note, &fw.source, &src_qn);
                 src.properties.insert("type", "foreshadow");
                 src.properties.insert("description", fw.description.as_str());
+                src.properties.insert("source", parsed.source.as_str());
                 let src_id = ctx.graph.upsert_node(src);
                 let mut tgt = Node::new(&project_name, NodeLabel::Note, &fw.target, &tgt_qn);
                 tgt.properties.insert("type", "foreshadow_target");
+                tgt.properties.insert("source", parsed.source.as_str());
                 let tgt_id = ctx.graph.upsert_node(tgt);
                 let mut edge = Edge::new(&project_name, src_id, tgt_id, EdgeType::Foreshadows);
                 edge.properties.insert("description", fw.description.as_str());
@@ -315,6 +351,7 @@ impl PipelinePass for ParseChapterPass {
                 if !tw.description.is_empty() {
                     node.properties.insert("description", tw.description.as_str());
                 }
+                node.properties.insert("source", parsed.source.as_str());
                 ctx.graph.upsert_node(node);
                 println!("  反转: {} → {}", tw.expectation, tw.reality);
             }
@@ -325,12 +362,30 @@ impl PipelinePass for ParseChapterPass {
         let tw_count: usize = results.iter()
             .map(|r| r.as_ref().map(|p| p.twists.len()).unwrap_or(0)).sum();
 
+        let mut tag_count = 0;
+        for result in &results {
+            let parsed = match result { Ok(p) => p, Err(_) => continue };
+            for tc in &parsed.tag_categories {
+                for tag_name in &tc.tags {
+                    let qn = format!("{}.标签.{}", project_name, tag_name);
+                    let mut node = Node::new(&project_name, NodeLabel::Note, tag_name, &qn);
+                    node.properties.insert("type", "tag");
+                    node.properties.insert("category", tc.category.as_str());
+                    node.properties.insert("source", parsed.source.as_str());
+                    let tag_id = ctx.graph.upsert_node(node);
+                    let edge = Edge::new(&project_name, tag_id, parsed.file_id, EdgeType::TaggedWith);
+                    ctx.graph.insert_edge(edge);
+                    tag_count += 1;
+                }
+            }
+        }
+
         println!(
-            "  ParseChapter: {} 角色, {} 地点, {} 关系, {} 情节, {} 冲突, {} 伏笔, {} 反转（{} 文件）",
+            "  ParseChapter: {} 角色, {} 地点, {} 关系, {} 情节, {} 冲突, {} 伏笔, {} 反转, {} 标签（{} 文件）",
             char_count, loc_count, rel_count,
             results.iter().map(|r| r.as_ref().map(|p| p.plot_phases.len()).unwrap_or(0)).sum::<usize>(),
             results.iter().map(|r| r.as_ref().map(|p| p.conflicts.len()).unwrap_or(0)).sum::<usize>(),
-            fw_count, tw_count, results.len()
+            fw_count, tw_count, tag_count, results.len()
         );
         Ok(())
     }
@@ -347,11 +402,25 @@ impl ParseChapterPass {
     /// - `- 本名` → 只有名字
     /// - `- 本名：描述` → 名字+描述
     /// - `- 本名：别名1、别名2（身份，性格，结局：xxx）` → 完整格式
+    /// 从文件内容提取章节名（# 第X回 或 # 第X章）
+    fn extract_chapter(content: &str) -> String {
+        for line in content.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("# ") {
+                if rest.contains('回') || rest.contains('章') {
+                    return rest.trim().to_string();
+                }
+            }
+        }
+        String::new()
+    }
+
     fn extract_chars(content: &str) -> Vec<CharacterInfo> {
         let mut chars = Vec::new();
         let mut in_section = false;
 
-        for line in content.lines() {
+        for (line_num, line) in content.lines().enumerate() {
+            let line_num = line_num as u32 + 1; // 1-indexed
             let t = line.trim();
             if let Some(rest) = t.strip_prefix("## ") {
                 in_section = rest.trim() == "角色" || rest.trim() == "人物";
@@ -382,7 +451,9 @@ impl ParseChapterPass {
                 // 解析结构化信息（可选）
                 // 新格式：- 林黛玉：颦儿、潇湘妃子（小姐，多愁善感，结局：泪尽而逝）
                 // 旧格式：- 张三：剑客，性格勇敢（无括号，整个描述当 traits）
-                let parsed = Self::parse_character_entry(&name, &desc);
+                let parsed = Self::parse_character_entry(&name, &desc, line_num);
+                // 更新 source_line 记录（已经包含在 parsed 里了）
+                // 旧格式的第2次中文冒号检测会重复同一行，line_num 已正确
 
                 chars.push(parsed);
             }
@@ -399,8 +470,9 @@ impl ParseChapterPass {
         let mut locs = Vec::new();
         let mut in_section = false;
 
-        for line in content.lines() {
+        for (line_num, line) in content.lines().enumerate() {
             let t = line.trim();
+            let line_num = line_num as u32 + 1;
             if let Some(rest) = t.strip_prefix("## ") {
                 in_section = rest.trim() == "地点" || rest.trim() == "场所";
                 continue;
@@ -412,11 +484,11 @@ impl ParseChapterPass {
                 if item.is_empty() { continue; }
 
                 if let Some((name, desc)) = item.split_once(':') {
-                    locs.push(LocationInfo { name: name.trim().to_string(), description: desc.trim().to_string() });
+                    locs.push(LocationInfo { name: name.trim().to_string(), source_line: line_num, description: desc.trim().to_string() });
                 } else if let Some((name, desc)) = item.split_once('：') {
-                    locs.push(LocationInfo { name: name.trim().to_string(), description: desc.trim().to_string() });
+                    locs.push(LocationInfo { name: name.trim().to_string(), source_line: line_num, description: desc.trim().to_string() });
                 } else {
-                    locs.push(LocationInfo { name: item.to_string(), description: String::new() });
+                    locs.push(LocationInfo { name: item.to_string(), source_line: line_num, description: String::new() });
                 }
             }
         }
@@ -485,7 +557,7 @@ impl ParseChapterPass {
     ///
     /// 新格式（有括号，别名+结构化信息）：
     ///   `- 林黛玉：颦儿、潇湘妃子（小姐，多愁善感，结局：泪尽而逝）`
-    fn parse_character_entry(name: &str, desc: &str) -> CharacterInfo {
+    fn parse_character_entry(name: &str, desc: &str, source_line: u32) -> CharacterInfo {
         // 尝试解析新格式：有 '（' 和 '）'
         if let Some(paren_start) = desc.find('（') {
             let after_open = &desc[paren_start + '（'.len_utf8()..];
@@ -525,6 +597,7 @@ impl ParseChapterPass {
 
                 return CharacterInfo {
                     name: name.to_string(),
+                    source_line,
                     aliases: before_paren.to_string(),
                     identity, personality,
                     appearance, motivation, psychology, fate,
@@ -536,6 +609,7 @@ impl ParseChapterPass {
         // 旧格式兜底：整个描述当 traits
         CharacterInfo {
             name: name.to_string(),
+            source_line,
             aliases: String::new(),
             identity: String::new(),
             personality: String::new(),
@@ -727,6 +801,46 @@ impl ParseChapterPass {
         }
         result
     }
+
+    /// 解析 `## 标签` 章节
+    ///
+    /// 格式：
+    /// ```markdown
+    /// ## 标签
+    /// - 情节：元妃省亲、抄检大观园
+    /// - 文化：中医药、诗词、建筑
+    /// ```
+    fn extract_tags(content: &str) -> Vec<TagCategory> {
+        let mut result = Vec::new();
+        let mut in_section = false;
+        for line in content.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("## ") {
+                in_section = rest.trim() == "标签" || rest.trim() == "分类";
+                continue;
+            }
+            if !in_section || t.starts_with("## ") { in_section = false; continue; }
+            if let Some(item) = t.strip_prefix("- ") {
+                let item = item.trim();
+                if item.is_empty() { continue; }
+                // 格式：分类名：标签1、标签2、标签3
+                if let Some((cat, tags_str)) = item.split_once('：').or_else(|| item.split_once(':')) {
+                    let tags: Vec<String> = tags_str.split(['、', ',', '，'])
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !tags.is_empty() {
+                        result.push(TagCategory {
+                            category: cat.trim().to_string(),
+                            tags,
+                        });
+                    }
+                }
+            }
+        }
+        result
+    }
 }
 
 // ============================================================
@@ -900,5 +1014,22 @@ mod tests {
         assert_eq!(env.society, "封建家族");
         assert_eq!(env.customs, "元宵节");
         assert_eq!(env.culture, "诗词");
+    }
+
+    // ── 标签提取 ──
+
+    #[test]
+    fn test_extract_tags() {
+        let content = "\
+## 标签
+- 情节：元妃省亲、抄检大观园
+- 文化：中医药、诗词
+";
+        let tags = ParseChapterPass::extract_tags(content);
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0].category, "情节");
+        assert_eq!(tags[0].tags, vec!["元妃省亲", "抄检大观园"]);
+        assert_eq!(tags[1].category, "文化");
+        assert_eq!(tags[1].tags, vec!["中医药", "诗词"]);
     }
 }

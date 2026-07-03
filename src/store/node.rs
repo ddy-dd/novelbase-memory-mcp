@@ -37,31 +37,29 @@ fn row_2_node(row: &rusqlite::Row) -> rusqlite::Result<Node> {
 impl super::Store{
     //插入或更新节点
     pub fn upsert_node(&self, node: &Node) -> Result<i64, super::StoreError> {
-        self.conn.execute(
+        // 💡 RETURNING id 一次 SQL 完成插入/更新 + 返回 ID
+        //    比 execute + SELECT 两次查询更高效
+        let id: i64 = self.conn.query_row(
             "INSERT INTO nodes (project, label, name, qualified_name, file_path, start_line, end_line, properties)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-               ON CONFLICT(qualified_name) DO UPDATE SET
+               ON CONFLICT(project, qualified_name) DO UPDATE SET
                    label = excluded.label,
                    name = excluded.name,
                    file_path = excluded.file_path,
                    start_line = excluded.start_line,
                    end_line = excluded.end_line,
-                   properties = excluded.properties",
+                   properties = excluded.properties
+               RETURNING id",
             rusqlite::params![
                   node.project,
-                  node.label.as_str(),      // NodeLabel → &str
+                  node.label.as_str(),
                   node.name,
                   node.qualified_name,
-                  node.file_path,            // Option<String> 自动变成 NULL
-                  node.start_line,           // Option<i32> 自动变成 NULL
+                  node.file_path,
+                  node.start_line,
                   node.end_line,
-                  node.properties.to_json(), // Properties → JSON String
+                  node.properties.to_json(),
               ],
-        )?;
-
-        let id = self.conn.query_row(
-            "SELECT id FROM nodes WHERE qualified_name = ?1",
-            rusqlite::params![node.qualified_name],
             |row| row.get::<_, i64>(0),
         )?;
 
@@ -69,9 +67,9 @@ impl super::Store{
         // 💡 trigram tokenizer 会自动把中文拆成重叠三字组
         //    "张三" → 可以搜 "张"、"三"、"张三"
         self.conn.execute(
-            "INSERT OR REPLACE INTO nodes_fts(rowid, name, qualified_name, project)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![id, node.name, node.qualified_name, node.project],
+            "INSERT OR REPLACE INTO nodes_fts(rowid, name, qualified_name, label, file_path, project)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, node.name, node.qualified_name, node.label.as_str(), node.file_path, node.project],
         )?;
 
         Ok(id)

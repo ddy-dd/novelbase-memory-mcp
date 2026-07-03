@@ -37,16 +37,18 @@ fn row_2_edge(row: &rusqlite::Row) -> rusqlite::Result<Edge> {
 // ============================================================
 
 impl super::Store {
-    /// 插入新边
+    /// 插入新边（重复时用 json_patch 合并 properties）
     ///
-    /// 💡 这里用 INSERT 而非 UPSERT
-    ///    因为边不像节点有 qualified_name 作为唯一键
-    ///    schema.sql 里 UNIQUE(source_id, target_id, type) 的组合唯一约束
-    ///    如果冲突直接报错，不自动覆盖
+    /// 💡 对齐 C 版：ON CONFLICT 时用 json_patch 合并 properties
+    ///    第二次导入携带的新属性会与已有的合并，不会丢失
+    ///    RETURNING id 一次 SQL 返回真实 ID
     pub fn insert_edge(&self, edge: &Edge) -> Result<i64, super::StoreError> {
-        self.conn.execute(
+        let id: i64 = self.conn.query_row(
             "INSERT INTO edges (project, source_id, target_id, type, properties)
-               VALUES (?1, ?2, ?3, ?4, ?5)",
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT(source_id, target_id, type) DO UPDATE SET
+                   properties = json_patch(properties, excluded.properties)
+               RETURNING id",
             rusqlite::params![
                   edge.project,
                   edge.source_id,
@@ -54,10 +56,10 @@ impl super::Store {
                   edge.edge_type.as_str(),
                   edge.properties.to_json(),
               ],
+            |row| row.get::<_, i64>(0),
         )?;
 
-        // 返回自增的 id
-        Ok(self.conn.last_insert_rowid())
+        Ok(id)
     }
 
     /// 按 ID 查找边

@@ -4,6 +4,7 @@ use thiserror::Error;
 mod node;
 mod edge;
 pub mod file_hashes;
+pub mod vectors;
 
 //Store错误枚举
 #[derive(Error, Debug)]
@@ -49,17 +50,40 @@ impl Store {
         // 不加这行的话，外键约束虽然存在但不执行
         self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
-        // FTS5 全文搜索表：重建以确保正确 schema
-        // 生产环境应该做版本迁移，但学习项目简化处理
+        // FTS5 全文搜索表（仅在表不存在时创建）
+        // 先用 CREATE IF NOT EXISTS 尝试，再验证列是否匹配
+        // 如果旧表缺列（如 label/file_path），自动重建
         self.conn.execute_batch(
-            "DROP TABLE IF EXISTS nodes_fts;
-             CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
-                 name, qualified_name, project
-             );
-             -- 从已有节点重建搜索索引
-             INSERT OR IGNORE INTO nodes_fts(rowid, name, qualified_name, project)
-             SELECT id, name, qualified_name, project FROM nodes;"
+            "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+                 name, qualified_name, label, file_path, project,
+                 tokenize='unicode61 remove_diacritics 2'
+             );"
         )?;
+        // 检查旧表字段是否齐全（尝试插入 label 列，成功则匹配）
+        let schema_ok = self.conn.execute_batch(
+            "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path, project)
+             VALUES (-1, '','','','',''); DELETE FROM nodes_fts WHERE rowid = -1;"
+        );
+        if schema_ok.is_err() {
+            // 旧表缺列 → 重建
+            self.conn.execute_batch(
+                "DROP TABLE IF EXISTS nodes_fts;
+                 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+                     name, qualified_name, label, file_path, project,
+                     tokenize='unicode61 remove_diacritics 2'
+                 );"
+            )?;
+        }
+        // 从已有节点重建搜索索引（幂等操作）
+        let _ = self.conn.execute_batch(
+            "INSERT OR IGNORE INTO nodes_fts(rowid, name, qualified_name, label, file_path, project)
+             SELECT id, name, qualified_name, label, file_path, project FROM nodes;"
+        );
+
+        // 向量搜索：注册余弦函数 + 创建向量表
+        let _ = vectors::register_cosine_function(&self.conn);
+        let _ = vectors::create_vector_tables(&self.conn);
+
         Ok(())
     }
 

@@ -52,10 +52,11 @@ impl PipelinePass for DiscoverPass {
                         let existing = ctx.store.get_file_hash(ctx.project_name, &rel_str)?;
                         if let Some(old) = existing {
                             if old.sha256 == hash.sha256 {
-                                // 文件没变 → 跳过，但还是要建一个 File 节点（方便后续 pass 使用）
+                                // 文件没变 → 跳过，但还是要建一个 File 节点
                                 let qn = format!("{}.{}", ctx.project_name, rel_str);
-                                let node = Node::new(ctx.project_name, NodeLabel::File, file_name, &qn)
+                                let mut node = Node::new(ctx.project_name, NodeLabel::File, file_name, &qn)
                                     .with_file(&rel_str);
+                                node.properties.insert("source", ctx.source);
                                 ctx.graph.upsert_node(node);
                                 skip_count += 1;
                                 continue;
@@ -64,8 +65,9 @@ impl PipelinePass for DiscoverPass {
 
                         // 新文件或已修改 → 创建节点，更新 hash 记录
                         let qn = format!("{}.{}", ctx.project_name, rel_str);
-                        let node = Node::new(ctx.project_name, NodeLabel::File, file_name, &qn)
+                        let mut node = Node::new(ctx.project_name, NodeLabel::File, file_name, &qn)
                             .with_file(&rel_str);
+                        node.properties.insert("source", ctx.source);
                         let id = ctx.graph.upsert_node(node);
                         ctx.store.upsert_file_hash(&hash)?;
                         new_count += 1;

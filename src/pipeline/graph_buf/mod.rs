@@ -135,6 +135,78 @@ impl GraphBuffer {
 
         Ok(())
     }
+
+    /// 删除节点及其关联的所有边
+    pub fn delete_node(&mut self, id: i64) -> bool {
+        // 先删关联边
+        self.edges.retain(|_, e| e.source_id != id && e.target_id != id);
+        self.edge_by_key.retain(|_, &mut eid| {
+            if self.edges.contains_key(&eid) { true } else { false }
+        });
+        // 删节点
+        if let Some(node) = self.nodes.remove(&id) {
+            self.qn_index.remove(&node.qualified_name);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 删除边
+    pub fn delete_edge(&mut self, id: i64) -> bool {
+        if let Some(edge) = self.edges.remove(&id) {
+            let key = (edge.source_id, edge.target_id, edge.edge_type.as_str().to_string());
+            self.edge_by_key.remove(&key);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 删除某个文件关联的所有数据和该文件节点（级联删除）
+    pub fn delete_by_file(&mut self, file_id: i64) {
+        // 找出所有连到这个文件的边
+        let edge_ids: Vec<i64> = self.edges.values()
+            .filter(|e| e.source_id == file_id || e.target_id == file_id)
+            .map(|e| e.id)
+            .collect();
+        for eid in edge_ids {
+            self.delete_edge(eid);
+        }
+        self.delete_node(file_id);
+    }
+
+    /// 合并另一个 GraphBuffer 到当前（对应 C 版 cbm_gbuf_merge）
+    ///
+    /// 冲突时保留 src 的节点数据，dst 的现有节点被覆盖
+    pub fn merge(&mut self, src: GraphBuffer) {
+        for (_, mut node) in src.nodes {
+            // 用 qualified_name 去重
+            let qn_key = node.qualified_name.clone();
+            if let Some(&existing_id) = self.qn_index.get(&qn_key) {
+                node.id = existing_id;
+                self.nodes.insert(existing_id, node);
+            } else {
+                let new_id = self.next_id;
+                self.next_id += 1;
+                node.id = new_id;
+                self.qn_index.insert(qn_key, new_id);
+                self.nodes.insert(new_id, node);
+            }
+        }
+        for (_, edge) in src.edges {
+            // 用组合键去重
+            let key = (edge.source_id, edge.target_id, edge.edge_type.as_str().to_string());
+            if !self.edge_by_key.contains_key(&key) {
+                let new_id = self.next_id;
+                self.next_id += 1;
+                let mut e = edge;
+                e.id = new_id;
+                self.edge_by_key.insert(key, new_id);
+                self.edges.insert(new_id, e);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +272,46 @@ mod tests {
         // 两条边应该返回同一个 ID（去重了）
         assert_eq!(id1, id2);
         assert_eq!(gb.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_delete_node() {
+        let mut gb = GraphBuffer::new("test");
+        let n1 = gb.upsert_node(Node::new("test", NodeLabel::Character, "A", "test.A"));
+        let n2 = gb.upsert_node(Node::new("test", NodeLabel::Character, "B", "test.B"));
+        gb.insert_edge(Edge::new("test", n1, n2, EdgeType::Knows));
+
+        assert!(gb.delete_node(n1));         // 删除 A
+        assert!(gb.find_by_qn("test.A").is_none()); // A 不存在
+        assert_eq!(gb.node_count(), 1);      // 只有 B
+        assert_eq!(gb.edge_count(), 0);      // 关联边也被删了
+    }
+
+    #[test]
+    fn test_delete_by_file() {
+        let mut gb = GraphBuffer::new("test");
+        let file1 = gb.upsert_node(Node::new("test", NodeLabel::File, "ch1.md", "test.ch1.md"));
+        let file2 = gb.upsert_node(Node::new("test", NodeLabel::File, "ch2.md", "test.ch2.md"));
+        let char1 = gb.upsert_node(Node::new("test", NodeLabel::Character, "A", "test.A"));
+        gb.insert_edge(Edge::new("test", char1, file1, EdgeType::AppearsIn));
+
+        gb.delete_by_file(file1);
+        assert_eq!(gb.node_count(), 2);      // file2 + char1
+        assert_eq!(gb.edge_count(), 0);      // 边被级联删了
+        assert!(gb.find_by_qn("test.ch1.md").is_none()); // file1 gone
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut dst = GraphBuffer::new("test");
+        dst.upsert_node(Node::new("test", NodeLabel::Character, "A", "test.A"));
+        dst.upsert_node(Node::new("test", NodeLabel::Character, "B", "test.B"));
+
+        let mut src = GraphBuffer::new("test");
+        src.upsert_node(Node::new("test", NodeLabel::Character, "C", "test.C"));
+        src.upsert_node(Node::new("test", NodeLabel::Character, "A", "test.A")); // 冲突
+
+        dst.merge(src);
+        assert_eq!(dst.node_count(), 3);     // A, B, C
     }
 }

@@ -120,8 +120,8 @@ fn run_cli_command(cmd: CliCommand) -> anyhow::Result<()> {
         CliCommand::Search { query, label, project } => {
             search_graph(query.as_deref(), label.as_deref(), project.as_deref())
         }
-        CliCommand::Import { path, project } => {
-            import_file(&path, project.as_deref())
+        CliCommand::Import { path, project, source } => {
+            import_file(&path, project.as_deref(), source.as_deref())
         }
     }
 }
@@ -254,7 +254,7 @@ fn search_graph(query: Option<&str>, label: Option<&str>, project: Option<&str>)
 /// 导入文件/目录到知识图谱
 ///
 /// 用 pipeline 扫描 .md 文件，提取节点信息存入数据库
-fn import_file(path: &str, project: Option<&str>) -> anyhow::Result<()> {
+fn import_file(path: &str, project: Option<&str>, source: Option<&str>) -> anyhow::Result<()> {
     // 确定项目名（没指定就从目录名推断）
     let project_name = match project {
         Some(name) => name.to_string(),
@@ -285,17 +285,20 @@ fn import_file(path: &str, project: Option<&str>) -> anyhow::Result<()> {
     // 💡 大括号创建一个作用域——pipeline 跑完后 ctx 自动释放
     //    这样 ctx 借用的 &mut graph 才会归还，后面才能调用 graph.dump_to_store
     {
+        let source_str = source.unwrap_or("original");
         let mut ctx = pipeline::context::Context::new(
             &project_name,
             &repo_path_str,
             &store,
             &mut graph,
             &cancelled,
+            source_str,
         );
 
         let pipeline = pipeline::Pipeline::new(vec![
             Box::new(pipeline::passes::discover::DiscoverPass),
             Box::new(pipeline::passes::parse_chapter::ParseChapterPass),
+            Box::new(pipeline::passes::embed::EmbeddingPass),
         ]);
 
         pipeline.run(&mut ctx)?;
