@@ -67,9 +67,11 @@ impl Server {
                 continue;
             }
 
-            let response = self.handle_request(line);
-            writeln!(writer, "{}", response)?;
-            writer.flush()?;
+            if let Some(response) = self.handle_request(line) {
+                writeln!(writer, "{}", response)?;
+                writer.flush()?;
+            }
+            // None = 通知（如 notifications/initialized），不需要回复
         }
 
         Ok(())
@@ -78,19 +80,26 @@ impl Server {
     /// 处理一行 JSON-RPC 请求
     ///
     /// 💡 这是整个 MCP 服务器的核心——一个 match 分派所有方法
-    ///    对应 C 版的 cbm_mcp_server_handle
-    fn handle_request(&self, line: &str) -> String {
+    ///    返回 None 表示这是个通知（不需要写响应）
+    fn handle_request(&self, line: &str) -> Option<String> {
         // 1. 解析 JSON-RPC 请求
         let req: JsonRpcRequest = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => {
-                return JsonRpcResponse::error(None, -32700, format!("Parse error: {}", e)).to_json();
+                return Some(JsonRpcResponse::error(None, -32700, format!("Parse error: {}", e)).to_json());
             }
         };
 
         let id = req.id;
 
-        // 2. 按方法名分发
+        // 2. 通知（没有 id）—— JSON-RPC 通知不需要响应
+        //    比如 notifications/initialized 就是客户端发来的通知
+        if id.is_none() {
+            log::info!("收到 MCP 通知: {}", req.method);
+            return None;
+        }
+
+        // 3. 按方法名分发
         let result = match req.method.as_str() {
             // MCP 协议初始化
             "initialize" => {
@@ -129,12 +138,12 @@ impl Server {
             }
             // 未知方法
             _ => {
-                return JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method)).to_json();
+                return Some(JsonRpcResponse::error(id, -32601, format!("Method not found: {}", req.method)).to_json());
             }
         };
 
-        // 3. 包装成 JSON-RPC 响应
-        JsonRpcResponse::success(id, result).to_json()
+        // 4. 包装成 JSON-RPC 响应
+        Some(JsonRpcResponse::success(id, result).to_json())
     }
 }
 

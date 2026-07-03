@@ -87,6 +87,17 @@ impl Store {
         Ok(())
     }
 
+    /// 列出所有项目名
+    pub fn list_projects(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT name FROM projects ORDER BY name")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut projects = Vec::new();
+        for row in rows {
+            projects.push(row?);
+        }
+        Ok(projects)
+    }
+
     /// 确保项目存在（如果不存在则创建）
     ///
     /// 💡 INSERT OR IGNORE — 如果 name 已存在就跳过

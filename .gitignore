@@ -4,4 +4,6 @@
 /novelbase-arch.md
 /codebase-memory-mcp
 novelbase.db
+novelbase/
+docs/*.png
 .DS_Store

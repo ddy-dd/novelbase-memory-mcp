@@ -82,6 +82,18 @@ pub fn all_tools() -> Vec<ToolDef> {
                 "required": ["project", "label"]
             }),
         },
+        ToolDef {
+            name: "get_node_info",
+            description: "获取知识图谱中某个节点的详细信息（属性、关联关系等）",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "项目名"},
+                    "name": {"type": "string", "description": "节点名"}
+                },
+                "required": ["project", "name"]
+            }),
+        },
     ]
 }
 
@@ -115,6 +127,12 @@ struct SearchGraphArgs {
     label: String,
 }
 
+#[derive(serde::Deserialize)]
+struct GetNodeInfoArgs {
+    project: String,
+    name: String,
+}
+
 // ============================================================
 // 工具分发与处理
 // ============================================================
@@ -129,6 +147,7 @@ pub fn dispatch_tool(store: &Store, tool_name: &str, args: serde_json::Value) ->
         "list_characters" => handle_list_characters(store, args),
         "add_relationship" => handle_add_relationship(store, args),
         "search_graph" => handle_search_graph(store, args),
+        "get_node_info" => handle_get_node_info(store, args),
         _ => ToolResult::error(format!("未知工具: {}", tool_name)),
     }
 }
@@ -259,4 +278,56 @@ fn handle_search_graph(store: &Store, args: serde_json::Value) -> ToolResult {
         }
         Err(e) => ToolResult::error(format!("查询失败: {}", e)),
     }
+}
+
+/// 获取节点详细信息（属性 + 关联关系）
+fn handle_get_node_info(store: &Store, args: serde_json::Value) -> ToolResult {
+    let params: GetNodeInfoArgs = match serde_json::from_value(args) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::error(format!("参数解析失败: {}", e)),
+    };
+    if let Err(e) = ensure_project(store, &params.project) {
+        return e;
+    }
+
+    let qn = format!("{}.{}", params.project, params.name);
+    let node = match store.find_node_by_qn(&params.project, &qn) {
+        Ok(Some(n)) => n,
+        Ok(None) => return ToolResult::error(format!("未找到节点: {}", params.name)),
+        Err(e) => return ToolResult::error(format!("查询失败: {}", e)),
+    };
+
+    let mut lines = format!("📋 节点详情: {}\n", node.name);
+    lines.push_str(&format!("  ID: {}\n", node.id));
+    lines.push_str(&format!("  类型: {}\n", node.label.cn_name()));
+    if let Some(fp) = &node.file_path {
+        if !fp.is_empty() {
+            lines.push_str(&format!("  文件: {}\n", fp));
+        }
+    }
+    let traits = node.properties.get_str("traits").unwrap_or_default();
+    if !traits.is_empty() {
+        lines.push_str(&format!("  特征: {}\n", traits));
+    }
+    let alias = node.properties.get_str("alias").unwrap_or_default();
+    if !alias.is_empty() {
+        lines.push_str(&format!("  别名: {}\n", alias));
+    }
+
+    let edges = match store.find_edges_for_node(node.id) {
+        Ok(e) => e,
+        Err(_) => vec![],
+    };
+    if !edges.is_empty() {
+        lines.push_str(&format!("\n🔗 关联关系 ({} 条):\n", edges.len()));
+        for edge in &edges {
+            let other_id = if edge.source_id == node.id { edge.target_id } else { edge.source_id };
+            let direction = if edge.source_id == node.id { "→" } else { "←" };
+            if let Ok(Some(other)) = store.find_node_by_id(other_id) {
+                lines.push_str(&format!("  {} {} [{}] {}\n", node.name, direction, edge.edge_type.as_str(), other.name));
+            }
+        }
+    }
+
+    ToolResult::text(lines)
 }
