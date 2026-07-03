@@ -36,7 +36,7 @@ fn row_2_node(row: &rusqlite::Row) -> rusqlite::Result<Node> {
 
 impl super::Store{
     //插入或更新节点
-    pub fn upsert_node(&mut self, node: &Node) -> Result<i64, super::StoreError> {
+    pub fn upsert_node(&self, node: &Node) -> Result<i64, super::StoreError> {
         self.conn.execute(
             "INSERT INTO nodes (project, label, name, qualified_name, file_path, start_line, end_line, properties)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -64,6 +64,16 @@ impl super::Store{
             rusqlite::params![node.qualified_name],
             |row| row.get::<_, i64>(0),
         )?;
+
+        // 同步 FTS 全文搜索索引
+        // 💡 trigram tokenizer 会自动把中文拆成重叠三字组
+        //    "张三" → 可以搜 "张"、"三"、"张三"
+        self.conn.execute(
+            "INSERT OR REPLACE INTO nodes_fts(rowid, name, qualified_name, project)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, node.name, node.qualified_name, node.project],
+        )?;
+
         Ok(id)
     }
 
@@ -110,8 +120,61 @@ impl super::Store{
         Ok(nodes)
     }
 
-    /// 删除节点
+    /// 按名字模糊搜索节点（LIKE 查询）
+    ///
+    /// 💡 SQL 的 LIKE + % 通配符
+    ///    查询 "三" → 匹配 "张三"、"三体"、"三个火枪手"
+    ///    对应 search 命令的 query 参数
+    pub fn find_nodes_by_name(&self, project: &str, name_pattern: &str) -> Result<Vec<Node>, super::StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project, label, name, qualified_name, file_path, start_line, end_line, properties
+             FROM nodes WHERE project = ?1 AND name LIKE ?2
+             ORDER BY name",
+        )?;
+
+        // 把 "张三" 变成 "%张三%"——SQL 的 LIKE 通配符
+        let pattern = format!("%{}%", name_pattern);
+        let rows = stmt.query_map(rusqlite::params![project, pattern], row_2_node)?;
+        let nodes: Vec<Node> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(nodes)
+    }
+
+    /// FTS5 全文搜索
+    ///
+    /// 💡 unicode61 tokenizer 把中文每个字当独立 token
+    ///    搜 "三" → 用 MATCH '三*' → 匹配 "张三"、"第三章"
+    ///    搜 "张三" → 用 MATCH '张三*' → 优先匹配精确开头
+    ///
+    ///    比 LIKE %xxx% 搜索更智能：
+    ///    - 按相关度排序（BM25 算法），匹配度高的在前
+    ///    - 全文索引速度更快（不用全表扫描）
+    pub fn search_fts(&self, project: &str, query: &str) -> Result<Vec<Node>, super::StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.id, n.project, n.label, n.name, n.qualified_name,
+                    n.file_path, n.start_line, n.end_line, n.properties
+             FROM nodes n
+             JOIN nodes_fts fts ON n.id = fts.rowid
+             WHERE nodes_fts MATCH ?1 AND n.project = ?2
+             ORDER BY rank
+             LIMIT 30",
+        )?;
+
+        // FTS5 需要 * 后缀做前缀匹配
+        // "三" → "三*" 匹配所有以"三"开头的 token（含"张三"中的"三"）
+        // "张三" → "张三*" 优先匹配"张三"开头的
+        let fts_query = format!("{}*", query);
+        let rows = stmt.query_map(rusqlite::params![fts_query, project], row_2_node)?;
+        let nodes: Vec<Node> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(nodes)
+    }
+
+    /// 删除节点（同时清理 FTS 索引）
     pub fn delete_node(&self, id: i64) -> Result<bool, super::StoreError> {
+        // 先删 FTS 索引，再删数据
+        self.conn.execute(
+            "DELETE FROM nodes_fts WHERE rowid = ?1",
+            rusqlite::params![id],
+        )?;
         let affected = self.conn.execute(
             "DELETE FROM nodes WHERE id = ?1",
             rusqlite::params![id],
@@ -127,7 +190,7 @@ mod tests {
 
     #[test]
     fn test_upsert_and_find_by_qn() {
-        let mut store = Store::open_memory().expect("创建内存数据库");
+        let store = Store::open_memory().expect("创建内存数据库");
         store.ensure_project("test_project").unwrap();
 
         let node = Node::new("test_project", NodeLabel::Character, "张三", "test_project.张三");
@@ -154,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_find_by_label() {
-        let mut store = Store::open_memory().expect("创建内存数据库");
+        let store = Store::open_memory().expect("创建内存数据库");
         store.ensure_project("p1").unwrap();
 
         // 插入两个角色和一个地点
@@ -172,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_upsert_updates_existing() {
-        let mut store = Store::open_memory().expect("创建内存数据库");
+        let store = Store::open_memory().expect("创建内存数据库");
         store.ensure_project("p1").unwrap();
 
         store.upsert_node(&Node::new("p1", NodeLabel::Character, "张三", "p1.张三")).unwrap();
@@ -192,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_delete_node() {
-        let mut store = Store::open_memory().expect("创建内存数据库");
+        let store = Store::open_memory().expect("创建内存数据库");
         store.ensure_project("p1").unwrap();
         let id = store.upsert_node(&Node::new("p1", NodeLabel::Character, "张三", "p1.张三")).unwrap();
 

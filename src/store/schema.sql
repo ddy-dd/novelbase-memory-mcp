@@ -29,6 +29,17 @@ CREATE TABLE IF NOT EXISTS edges (
     UNIQUE(source_id, target_id, type)
     );
 
+-- 文件哈希表（用于增量导入时跳过未修改的文件）
+CREATE TABLE IF NOT EXISTS file_hashes (
+                                              project TEXT NOT NULL,
+                                              rel_path TEXT NOT NULL,
+                                              sha256 TEXT NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    PRIMARY KEY (project, rel_path)
+    );
+
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project);
 CREATE INDEX IF NOT EXISTS idx_nodes_label ON nodes(label);

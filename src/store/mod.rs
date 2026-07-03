@@ -3,6 +3,7 @@ use std::path::Path;
 use thiserror::Error;
 mod node;
 mod edge;
+pub mod file_hashes;
 
 //Store错误枚举
 #[derive(Error, Debug)]
@@ -47,6 +48,18 @@ impl Store {
         // SQLite 默认不检查外键约束，需要显式开启（每个连接都要设）
         // 不加这行的话，外键约束虽然存在但不执行
         self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+        // FTS5 全文搜索表：重建以确保正确 schema
+        // 生产环境应该做版本迁移，但学习项目简化处理
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS nodes_fts;
+             CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+                 name, qualified_name, project
+             );
+             -- 从已有节点重建搜索索引
+             INSERT OR IGNORE INTO nodes_fts(rowid, name, qualified_name, project)
+             SELECT id, name, qualified_name, project FROM nodes;"
+        )?;
         Ok(())
     }
 

@@ -3,3 +3,5 @@
 /.idea
 /novelbase-arch.md
 /codebase-memory-mcp
+novelbase.db
+.DS_Store

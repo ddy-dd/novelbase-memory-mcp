@@ -23,8 +23,11 @@
 // 但目前 main.rs 是顶层入口，不需要 pub，用 use 就够了
 
 mod cli;
+mod mcp;
 mod models;
+mod pipeline;
 pub mod store;
+mod ui;
 // ============================================================
 // 导入
 // ============================================================
@@ -68,6 +71,7 @@ fn main() -> anyhow::Result<()> {
     // 编译器会检查是否穷举了所有变体
     match cli.command {
         Commands::Server => run_server(),
+        Commands::Ui { port, project } => run_ui(port, project.as_deref()),
         Commands::Cli(cmd) => run_cli_command(cmd),
         Commands::Init { name, path } => init_project(&name, path.as_deref()),
         Commands::Config { action } => handle_config(action),
@@ -85,8 +89,19 @@ fn main() -> anyhow::Result<()> {
 ///    这是 Rust 开发常用的"先搭架子"方式
 fn run_server() -> anyhow::Result<()> {
     info!("MCP 服务器模式");
-    println!("novelbase-memory-mcp MCP server (not yet implemented)");
-    todo!("MCP 服务器将在下一章实现")
+    let store = store_ok(Store::open(DB_PATH))?;
+    let server = mcp::Server::new(store);
+    server.run()?;
+    Ok(())
+}
+
+/// 启动 Web UI
+fn run_ui(port: u16, _project: Option<&str>) -> anyhow::Result<()> {
+    info!("Web UI 模式 (端口 {})", port);
+    let rt = tokio::runtime::Runtime::new()?;
+    let server = ui::UIServer::new(DB_PATH);
+    rt.block_on(server.run(port))?;
+    Ok(())
 }
 
 /// 处理 CLI 命令
@@ -103,7 +118,7 @@ fn run_cli_command(cmd: CliCommand) -> anyhow::Result<()> {
         }
         CliCommand::ListCharacters { project } => list_characters(project.as_deref()),
         CliCommand::Search { query, label, project } => {
-            search_graph(&query, label.as_deref(), project.as_deref())
+            search_graph(query.as_deref(), label.as_deref(), project.as_deref())
         }
         CliCommand::Import { path, project } => {
             import_file(&path, project.as_deref())
@@ -118,7 +133,7 @@ fn run_cli_command(cmd: CliCommand) -> anyhow::Result<()> {
 /// 添加角色
 fn add_character(name: &str, project: Option<&str>, traits: Option<&str>) -> anyhow::Result<()> {
     let project = project.unwrap_or("default");
-    let mut store = store_ok(Store::open(DB_PATH))?;
+    let store = store_ok(Store::open(DB_PATH))?;
 
     let mut node = Node::new(project, NodeLabel::Character, name, &format!("{}.{}", project, name));
     if let Some(t) = traits {
@@ -173,37 +188,129 @@ fn list_characters(project: Option<&str>) -> anyhow::Result<()> {
 }
 
 /// 搜索图谱
-fn search_graph(_query: &str, label: Option<&str>, project: Option<&str>) -> anyhow::Result<()> {
+///
+/// query 参数：按名字模糊搜索（LIKE %query%）
+/// --label 参数：按标签过滤（可选）
+/// 两个都提供 = 搜名字 + 过滤标签
+/// 只提供 query = 搜所有类型节点
+/// 只提供 --label = 列出该类型所有节点
+fn search_graph(query: Option<&str>, label: Option<&str>, project: Option<&str>) -> anyhow::Result<()> {
     let project = project.unwrap_or("default");
     let store = store_ok(Store::open(DB_PATH))?;
 
-    if let Some(label_str) = label {
-        match NodeLabel::from_str(label_str) {
-            Some(node_label) => {
-                let nodes = store_ok(store.find_nodes_by_label(project, node_label.clone()))?;
-                println!("📋 找到 {} 个 [{}] 节点:", nodes.len(), node_label.cn_name());
-                for n in &nodes {
-                    println!("  - {} (ID: {}, 文件: {})",
-                        n.name,
-                        n.id,
-                        n.file_path.as_deref().unwrap_or("-"),
-                    );
+    let nodes = if let Some(q) = query {
+        // 有关键词 → 优先用 FTS5 全文搜索（相关度排序，支持中文）
+        let mut nodes = match store_ok(store.search_fts(project, q)) {
+            Ok(n) if !n.is_empty() => n,
+            // FTS 搜不到或报错 → 回退到 LIKE 模糊匹配
+            _ => store_ok(store.find_nodes_by_name(project, q))?,
+        };
+        // 如果还指定了 label，在 Rust 层过滤
+        if let Some(label_str) = label {
+            match NodeLabel::from_str(label_str) {
+                Some(node_label) => {
+                    nodes.retain(|n| n.label == node_label);
+                }
+                None => {
+                    println!("未知标签: {}，可用: character/location/scene/chapter/plotline/timeline/item/note/project/file", label_str);
+                    return Ok(());
                 }
             }
+        }
+        nodes
+    } else if let Some(label_str) = label {
+        // 没关键词但指定了 label → 列出该类型所有节点
+        match NodeLabel::from_str(label_str) {
+            Some(node_label) => {
+                store_ok(store.find_nodes_by_label(project, node_label))?
+            }
             None => {
-                println!("未知标签: {}，可用标签: character/location/scene/chapter/plotline/timeline/item/note/project/file", label_str);
+                println!("未知标签: {}", label_str);
+                return Ok(());
             }
         }
     } else {
-        println!("请使用 --label 参数指定要搜索的节点类型");
+        println!("请指定搜索关键词或 --label");
+        return Ok(());
+    };
+
+    if nodes.is_empty() {
+        println!("没有找到匹配的节点");
+        return Ok(());
+    }
+
+    println!("📋 找到 {} 个节点:", nodes.len());
+    for n in &nodes {
+        println!("  - [{}] {} (ID: {}, 文件: {})",
+            n.label.cn_name(),
+            n.name,
+            n.id,
+            n.file_path.as_deref().unwrap_or("-"),
+        );
     }
     Ok(())
 }
 
-/// 导入文件
-fn import_file(_path: &str, _project: Option<&str>) -> anyhow::Result<()> {
-    println!("导入文件: 暂未实现");
-    println!("将在 pipeline 模块实现后支持导入");
+/// 导入文件/目录到知识图谱
+///
+/// 用 pipeline 扫描 .md 文件，提取节点信息存入数据库
+fn import_file(path: &str, project: Option<&str>) -> anyhow::Result<()> {
+    // 确定项目名（没指定就从目录名推断）
+    let project_name = match project {
+        Some(name) => name.to_string(),
+        None => std::path::Path::new(path)
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default")
+            .to_string(),
+    };
+
+    // 确定扫描目录（如果是文件，用其所在目录）
+    let path_buf = std::path::Path::new(path);
+    let repo_path = if path_buf.is_file() {
+        path_buf.parent().unwrap_or(std::path::Path::new("."))
+    } else {
+        path_buf
+    };
+    let repo_path_str = repo_path.to_string_lossy().to_string();
+
+    // 打开数据库，确保项目存在
+    let store = store_ok(Store::open(DB_PATH))?;
+    store_ok(store.ensure_project(&project_name))?;
+
+    // 创建 Pipeline 并运行
+    let mut graph = pipeline::graph_buf::GraphBuffer::new(&project_name);
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    // 💡 大括号创建一个作用域——pipeline 跑完后 ctx 自动释放
+    //    这样 ctx 借用的 &mut graph 才会归还，后面才能调用 graph.dump_to_store
+    {
+        let mut ctx = pipeline::context::Context::new(
+            &project_name,
+            &repo_path_str,
+            &store,
+            &mut graph,
+            &cancelled,
+        );
+
+        let pipeline = pipeline::Pipeline::new(vec![
+            Box::new(pipeline::passes::discover::DiscoverPass),
+            Box::new(pipeline::passes::parse_chapter::ParseChapterPass),
+        ]);
+
+        pipeline.run(&mut ctx)?;
+    } // 👈 ctx 在这里被 drop，graph 的借用结束
+
+    // 把内存中的图数据刷到 SQLite
+    // 💡 dump_to_store 会更新 graph 里 node 的 ID（临时 ID → SQLite 真实 ID）
+    graph.dump_to_store(&store)?;
+
+    println!(
+        "✅ 导入完成: 项目 '{}'，{} 个节点，{} 条边",
+        project_name,
+        graph.node_count(),
+        graph.edge_count()
+    );
     Ok(())
 }
 

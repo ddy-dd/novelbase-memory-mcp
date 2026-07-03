@@ -32,6 +32,10 @@ pub enum EdgeType {
     Mentions,
     /// 一般的关联关系
     RelatedTo,
+    /// A 为 B 埋下伏笔（叙事装置）
+    Foreshadows,
+    /// 反转/意外转折（A 与预期相反）
+    Twist,
 }
 
 impl EdgeType {
@@ -46,6 +50,8 @@ impl EdgeType {
             "HAPPENS_AT" | "HappensAt" | "happens_at" => Some(Self::HappensAt),
             "MENTIONS" | "Mentions" | "mentions" => Some(Self::Mentions),
             "RELATED_TO" | "RelatedTo" | "related_to" => Some(Self::RelatedTo),
+            "FORESHADOWS" | "Foreshadows" | "foreshadows" => Some(Self::Foreshadows),
+            "TWIST" | "Twist" | "twist" => Some(Self::Twist),
             _ => None,
         }
     }
@@ -61,6 +67,8 @@ impl EdgeType {
             Self::HappensAt => "HAPPENS_AT",
             Self::Mentions => "MENTIONS",
             Self::RelatedTo => "RELATED_TO",
+            Self::Foreshadows => "FORESHADOWS",
+            Self::Twist => "TWIST",
         }
     }
 
@@ -75,6 +83,8 @@ impl EdgeType {
             Self::HappensAt => "发生在",
             Self::Mentions => "提及",
             Self::RelatedTo => "关联",
+            Self::Foreshadows => "伏笔",
+            Self::Twist => "反转",
         }
     }
 }

@@ -52,6 +52,15 @@ pub struct Cli {
 pub enum Commands {
     /// 启动 MCP 服务器（stdin/stdout JSON-RPC）
     Server,
+    /// 启动 Web UI（浏览器可视化界面）
+    Ui {
+        /// 端口号
+        #[arg(long, default_value = "8080")]
+        port: u16,
+        /// 项目名（默认 "default"）
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// CLI 模式：执行单次操作
     #[command(subcommand)]
     Cli(CliCommand),
@@ -107,10 +116,10 @@ pub enum CliCommand {
         /// 项目
         project: Option<String>,
     },
-    /// 搜索图谱
+    /// 搜索图谱（关键词可选，不指定则按 --label 列出所有）
     Search {
-        /// 搜索关键词
-        query: String,
+        /// 搜索关键词（模糊匹配）
+        query: Option<String>,
         /// 节点标签过滤
         #[arg(long)]
         label: Option<String>,

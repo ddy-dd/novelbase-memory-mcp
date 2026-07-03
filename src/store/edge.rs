@@ -88,6 +88,19 @@ impl super::Store {
         Ok(edges)
     }
 
+    /// 查找项目中所有边
+    pub fn find_all_edges(&self, project: &str) -> Result<Vec<Edge>, super::StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project, source_id, target_id, type, properties
+             FROM edges WHERE project = ?1
+             ORDER BY id",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![project], row_2_edge)?;
+        let edges: Vec<Edge> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(edges)
+    }
+
     /// 按类型查找边
     pub fn find_edges_by_type(&self, project: &str, edge_type: EdgeType) -> Result<Vec<Edge>, super::StoreError> {
         let mut stmt = self.conn.prepare(
@@ -122,7 +135,7 @@ mod tests {
 
     // 测试辅助函数：创建一个项目 + 两个节点，返回 (store, id_a, id_b)
     fn setup_graph() -> (Store, i64, i64) {
-        let mut store = Store::open_memory().expect("创建内存数据库");
+        let store = Store::open_memory().expect("创建内存数据库");
         store.ensure_project("novel").unwrap();
 
         let a = store.upsert_node(&Node::new("novel", NodeLabel::Character, "张三", "novel.张三")).unwrap();
